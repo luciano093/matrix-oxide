@@ -4,5 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+ed25519-dalek = { version = "2.1.1", features = ["digest", "pem", "pkcs8", "rand_core"] }
 reqwest = { version = "0.12.12", features = ["blocking"] }
 serde_json = "1.0.138"
+rand = "0.8.5"
+base64 = "0.22.1"
