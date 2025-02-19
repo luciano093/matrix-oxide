@@ -1,11 +1,14 @@
 use std::fs::{create_dir, File};
 use std::io::{Read, Write};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4, TcpListener};
 use std::path::Path;
+use std::str::FromStr;
 
 use base64::Engine;
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use rand::rngs::OsRng;
 use serde_json::Value;
+use dotenv::dotenv;
 
 #[derive(Debug, Default)]
 struct Server {
@@ -85,5 +88,27 @@ impl Server {
 }
 
 fn main() {
-    Server::connect("https://matrix.org");    
+    dotenv().ok();
+    let listening_ip = std::env::var("LISTENING_IP_ADDR").expect("LISTENING_IP_ADDR must be set.");
+    let listening_port = std::env::var("LISTENING_PORT").expect("LISTENING_PORT must be set.");
+
+    let ip = if listening_ip == "localhost" {
+        IpAddr::from_str("127.0.0.1").unwrap()
+    } else {
+        IpAddr::from_str(&listening_ip).unwrap()
+    };
+    let socket = SocketAddr::new(ip, u16::from_str_radix(&listening_port, 10).unwrap());
+
+    Server::connect("https://matrix.org");
+
+    let listener = TcpListener::bind(socket).unwrap(); 
+
+    for packet in listener.incoming() {
+        let mut stream = packet.unwrap();
+        let mut buf = String::new();
+
+        stream.read_to_string(&mut buf).unwrap();
+
+        println!("{}", buf);
+    }
 }
