@@ -1,14 +1,23 @@
 use std::fs::{create_dir, File};
 use std::io::{Read, Write};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4, TcpListener};
+use std::net::{IpAddr, SocketAddr};
 use std::path::Path;
 use std::str::FromStr;
 
+use axum::body::{Body, Bytes};
+use axum::extract::Request;
+use axum::http::Response;
+use axum::middleware::Next;
+use axum::response::IntoResponse;
+use axum::routing::get;
+use axum::{middleware, Router};
 use base64::Engine;
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use rand::rngs::OsRng;
+use reqwest::StatusCode;
 use serde_json::Value;
 use dotenv::dotenv;
+use http_body_util::BodyExt;
 
 #[derive(Debug, Default)]
 struct Server {
@@ -63,7 +72,7 @@ impl Server {
         let mut server = Server::default();
         server.delegated_name = serde_json::from_str::<Value>(&body).unwrap()["m.server"].as_str().unwrap().to_owned();
 
-        println!("m.server: {}", server.delegated_name);
+        println!("{}", body);
 
         // get server implemenation name and version
         let mut res = reqwest::blocking::get(format!("https://{}/_matrix/federation/v1/version", server.delegated_name)).unwrap();
@@ -82,16 +91,21 @@ impl Server {
         let res = serde_json::from_str::<Value>(&body).unwrap();
 
         println!("server_name: {}\nsignatures: {}\nvalid_until_ts: {}\nverify_keys: {}", res["server_name"], res["signatures"], res["valid_until_ts"], res["verify_keys"]);
-
-
     }
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     dotenv().ok();
-    let listening_ip = std::env::var("LISTENING_IP_ADDR").expect("LISTENING_IP_ADDR must be set.");
-    let listening_port = std::env::var("LISTENING_PORT").expect("LISTENING_PORT must be set.");
+    let listening_ip = std::env::var("LISTENING_IP_ADDR").expect("LISTENING_IP_ADDR must be set");
+    let listening_port = std::env::var("LISTENING_PORT").expect("LISTENING_PORT must be set");
+    std::env::var("DELEGATED_IP_ADDR").expect("DELEGATED_IP_ADDR must be set");
+    std::env::var("DELEGATED_PORT").expect("DELEGATED_PORT must be set");
 
+    tokio::task::block_in_place(|| {
+        Server::connect("https://matrix.org");
+    });
+    
     let ip = if listening_ip == "localhost" {
         IpAddr::from_str("127.0.0.1").unwrap()
     } else {
@@ -99,16 +113,66 @@ fn main() {
     };
     let socket = SocketAddr::new(ip, u16::from_str_radix(&listening_port, 10).unwrap());
 
+    
+    let app = Router::new()
+        .route("/.well-known/matrix/server", get(well_known))
+        .layer(middleware::from_fn(print_responses));
+
+    let listener = tokio::net::TcpListener::bind(socket).await.unwrap();
+    println!("listening on {}", listener.local_addr().unwrap());
+
+    axum::serve(listener, app).await.unwrap();
+
     Server::connect("https://matrix.org");
+}
 
-    let listener = TcpListener::bind(socket).unwrap(); 
+async fn well_known() -> String {
+    let delegated_ip = std::env::var("DELEGATED_IP_ADDR").expect("DELEGATED_IP_ADDR must be set.");
+    let delegated_port = std::env::var("DELEGATED_PORT").expect("DELEGATED_PORT must be set.");
 
-    for packet in listener.incoming() {
-        let mut stream = packet.unwrap();
-        let mut buf = String::new();
+    let ip = if delegated_ip == "localhost" {
+        IpAddr::from_str("127.0.0.1").unwrap()
+    } else {
+        IpAddr::from_str(&delegated_ip).unwrap()
+    };
+    let socket = SocketAddr::new(ip, u16::from_str_radix(&delegated_port, 10).unwrap());
 
-        stream.read_to_string(&mut buf).unwrap();
+    format!("{{ \"m.server\": \"{}\" }}\n", socket.ip())
+}
 
-        println!("{}", buf);
+async fn print_responses(req: Request, next: Next) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let (parts, body) = req.into_parts();
+    let bytes = buffer_and_print("request", body).await?;
+    let req = Request::from_parts(parts, Body::from(bytes));
+    
+    let res = next.run(req).await;
+
+    let (parts, body) = res.into_parts();
+
+    let bytes = buffer_and_print("response", body).await?;
+    let res = Response::from_parts(parts, Body::from(bytes));
+
+    Ok(res)
+}
+
+async fn buffer_and_print<B>(direction: &str, body: B) -> Result<Bytes, (StatusCode, String)>
+where
+    B: axum::body::HttpBody<Data = Bytes>,
+    B::Error: std::fmt::Display,
+{
+    let bytes = match body.collect().await {
+        Ok(collected) => collected.to_bytes(),
+        Err(err) => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!("failed to read {direction} body: {err}"),
+            ));
+        }
+    };
+
+    if let Ok(body) = std::str::from_utf8(&bytes) {
+        println!("{direction}:\n{body}");
     }
+
+    Ok(bytes)
 }
