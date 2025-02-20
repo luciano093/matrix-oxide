@@ -1,7 +1,7 @@
 use std::fs::{create_dir, File};
 use std::io::{Read, Write};
 use std::net::{IpAddr, SocketAddr};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use axum::body::{Body, Bytes};
@@ -11,6 +11,7 @@ use axum::middleware::Next;
 use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::{middleware, Router};
+use axum_server::tls_rustls::RustlsConfig;
 use base64::Engine;
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use rand::rngs::OsRng;
@@ -96,11 +97,18 @@ impl Server {
 
 #[tokio::main]
 async fn main() {
+
     dotenv().ok();
     let listening_ip = std::env::var("LISTENING_IP_ADDR").expect("LISTENING_IP_ADDR must be set");
     let listening_port = std::env::var("LISTENING_PORT").expect("LISTENING_PORT must be set");
     std::env::var("DELEGATED_IP_ADDR").expect("DELEGATED_IP_ADDR must be set");
     std::env::var("DELEGATED_PORT").expect("DELEGATED_PORT must be set");
+
+    let cert = std::env::var("SSL_CERT").expect("SSL_CERT must be set");
+    let key = std::env::var("SSL_KEY").expect("SSL_KEY must be set");
+
+
+    let config: RustlsConfig = RustlsConfig::from_pem_file(PathBuf::from(cert), PathBuf::from(key)).await.unwrap();
 
     tokio::task::block_in_place(|| {
         Server::connect("https://matrix.org");
@@ -112,16 +120,14 @@ async fn main() {
         IpAddr::from_str(&listening_ip).unwrap()
     };
     let socket = SocketAddr::new(ip, u16::from_str_radix(&listening_port, 10).unwrap());
-
     
     let app = Router::new()
         .route("/.well-known/matrix/server", get(well_known))
         .layer(middleware::from_fn(print_responses));
 
-    let listener = tokio::net::TcpListener::bind(socket).await.unwrap();
-    println!("listening on {}", listener.local_addr().unwrap());
+    println!("listening on {}", socket);
 
-    axum::serve(listener, app).await.unwrap();
+    axum_server::bind_rustls(socket, config).serve(app.into_make_service()).await.unwrap();
 
     Server::connect("https://matrix.org");
 }
@@ -137,7 +143,7 @@ async fn well_known() -> String {
     };
     let socket = SocketAddr::new(ip, u16::from_str_radix(&delegated_port, 10).unwrap());
 
-    format!("{{ \"m.server\": \"{}\" }}\n", socket.ip())
+    format!("{{ \"m.server\": \"{}:{}\" }}\n", socket.ip(), socket.port())
 }
 
 async fn print_responses(req: Request, next: Next) -> Result<impl IntoResponse, (StatusCode, String)> {
