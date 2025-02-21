@@ -6,7 +6,7 @@ use std::process::exit;
 use std::str::FromStr;
 
 use axum::body::{Body, Bytes};
-use axum::extract::Request;
+use axum::extract::{ConnectInfo, Request};
 use axum::http::Response;
 use axum::middleware::Next;
 use axum::response::IntoResponse;
@@ -22,6 +22,54 @@ use dotenv::dotenv;
 use http_body_util::BodyExt;
 use url::Url;
 
+fn key_pair_exists() -> bool {
+    let key_pair_dir = Path::new("./.keys");
+    key_pair_dir.join("id_ed25519").exists() && key_pair_dir.join("id_ed25519.pub").exists()
+}
+
+fn is_key_pair_valid(private_key: &SigningKey, public_key: &VerifyingKey) -> bool {
+    private_key.verifying_key() == *public_key
+}
+
+fn create_key_pair() -> (SigningKey, VerifyingKey) {
+    if !Path::new("./.keys").exists() {
+        create_dir("./.keys").unwrap();
+    }
+
+    let mut csprng = OsRng;
+    let private_key = SigningKey::generate(&mut csprng);
+    let mut private_key_file = File::create_new("./.keys/id_ed25519").unwrap();
+
+    private_key_file.write_all(private_key.as_bytes()).unwrap();
+
+    let public_key = VerifyingKey::from(&private_key);
+    
+    let mut public_key_file = File::create_new("./.keys/id_ed25519.pub").unwrap();
+    public_key_file.write_all(public_key.as_bytes()).unwrap();
+
+    (private_key, public_key)
+}
+
+fn load_key_pair() -> (SigningKey, VerifyingKey) {
+    let private_key = {
+        let mut bytes = [0; 32];
+
+        File::open("./.keys/id_ed25519").unwrap().read_exact(&mut bytes).unwrap();
+
+        SigningKey::from_bytes(&bytes)
+    };
+
+    let public_key = {
+        let mut bytes = [0; 32];
+
+        File::open("./.keys/id_ed25519.pub").unwrap().read_exact(&mut bytes).unwrap();
+
+        VerifyingKey::from_bytes(&bytes).unwrap()
+    };
+
+    (private_key, public_key)
+}
+
 #[derive(Debug, Default)]
 struct Server {
     delegated_name: String,
@@ -29,44 +77,6 @@ struct Server {
 
 impl Server {
     fn connect(url: &str) {  
-        if !Path::new("./.keys").exists() {
-            create_dir("./.keys").unwrap();
-        }
-
-        let private_key = if Path::new("./.keys/id_ed25519").exists() {
-            let mut bytes = [0; 32];
-
-            File::open("./.keys/id_ed25519").unwrap().read_exact(&mut bytes).unwrap();
-
-            SigningKey::from_bytes(&bytes)
-        } else {
-            let mut csprng = OsRng;
-            let private_key = SigningKey::generate(&mut csprng);
-            let mut private_key_file = File::create_new("./.keys/id_ed25519").unwrap();
-
-            private_key_file.write_all(private_key.as_bytes()).unwrap();
-
-            private_key
-        };
-
-        let public_key = if Path::new("./.keys/id_ed25519.pub").exists() {
-            let mut bytes = [0; 32];
-
-            File::open("./.keys/id_ed25519.pub").unwrap().read_exact(&mut bytes).unwrap();
-
-            VerifyingKey::from_bytes(&bytes).unwrap()
-        } else {
-            let public_key = VerifyingKey::from(&private_key);
-            
-            let mut public_key_file = File::create_new("./.keys/id_ed25519.pub").unwrap();
-            public_key_file.write_all(public_key.as_bytes()).unwrap();
-
-            public_key
-        };
-        
-        println!("private_key: {}", base64::prelude::BASE64_STANDARD.encode(private_key.to_bytes()));
-        println!("public_key: {}", base64::prelude::BASE64_STANDARD.encode(public_key.to_bytes()));
-
         // get delegated server name
         let mut res = reqwest::blocking::get(format!("{}/.well-known/matrix/server", url)).unwrap();
         let mut body = String::new();
@@ -99,12 +109,17 @@ impl Server {
 
 #[derive(Debug, Clone)]
 struct Config {
+    // .env configurations
     listening_ip_addr: IpAddr,
     listening_port: u16,
     delegated_addr: String,
     delegated_port: u16,
     x509_cert_path: PathBuf,
     x509_key_path: PathBuf,
+
+    // key pair
+    private_key: SigningKey,
+    public_key: VerifyingKey,
 }
 
 impl Config {
@@ -239,7 +254,18 @@ impl Config {
         let x509_cert_path = x509_cert_path.unwrap();
         let x509_key_path = x509_key_path.unwrap();
 
-        Config { listening_ip_addr, listening_port, delegated_addr, delegated_port, x509_cert_path, x509_key_path }
+        let (private_key, public_key) = if !key_pair_exists() {
+            create_key_pair()
+        } else {
+            let (private_key, public_key) = load_key_pair();
+            if !is_key_pair_valid(&private_key, &public_key) {
+                create_key_pair()
+            } else {
+                (private_key, public_key)
+            }
+        };
+
+        Config { listening_ip_addr, listening_port, delegated_addr, delegated_port, x509_cert_path, x509_key_path, private_key, public_key }
     }
 }
 
@@ -258,19 +284,49 @@ async fn main() {
 
     let app = Router::new()
         .route("/.well-known/matrix/server", get(well_known))
+        .route("/_matrix/federation/v1/version", get(server_version))
+        .route("/_matrix/key/v2/server", get(server_keys))
         .layer(middleware::from_fn(print_responses))
         .layer(Extension(config));
 
-
     println!("listening on {}", listening_socket);
 
-    axum_server::bind_rustls(listening_socket, rustls_config).serve(app.into_make_service()).await.unwrap();
+    axum_server::bind_rustls(listening_socket, rustls_config).serve(app.into_make_service_with_connect_info::<SocketAddr>()).await.unwrap();
 
     Server::connect("https://matrix.org");
 }
 
 async fn well_known(config: Extension<Config>) -> String {
     format!("{{ \"m.server\": \"{}:{}\" }}\n", config.delegated_addr, config.delegated_port)
+}
+
+async fn server_version() -> String {
+    "{\"server\": {\"name\": \"matrix-oxide\", \"version\": \"0.0.1\"}}".to_string()
+}
+
+// temporary dummy response
+async fn server_keys() -> String {
+    format!(r#"{{
+        "old_verify_keys": {{
+            "ed25519:0ldk3y": {{
+                "expired_ts": 1532645052628,
+                "key": "VGhpcyBzaG91bGQgYmUgeW91ciBvbGQga2V5J3MgZWQyNTUxOSBwYXlsb2FkLg"
+            }}
+        }},
+        "server_name": "example.org",
+        "signatures": {{
+            "example.org": {{
+            "ed25519:auto2": "VGhpcyBzaG91bGQgYWN0dWFsbHkgYmUgYSBzaWduYXR1cmU"
+        }}
+        }},
+        "valid_until_ts": 1652262000000,
+        "verify_keys": {{
+            "ed25519:abc123": {{
+                "key": "VGhpcyBzaG91bGQgYmUgYSByZWFsIGVkMjU1MTkgcGF5bG9hZA"
+            }}
+        }}
+    }}
+    "#)
 }
 
 fn is_valid_address(str: &str) -> bool {
@@ -287,17 +343,20 @@ fn is_valid_port(str: &str) -> bool {
     str.parse::<u16>().map_or(false, |port| port != 0)
 }
 
-async fn print_responses(req: Request, next: Next) -> Result<impl IntoResponse, (StatusCode, String)> {
-    let (parts, body) = req.into_parts();
-    let bytes = buffer_and_print("request", body).await?;
-    let req = Request::from_parts(parts, Body::from(bytes));
+async fn print_responses(ConnectInfo(info): ConnectInfo<SocketAddr>, req: Request, next: Next) -> Result<impl IntoResponse, (StatusCode, String)> {
+    println!("Got {} request from: {} at {}", req.method(), dns_lookup::lookup_addr(&info.ip()).unwrap_or(info.to_string()), req.uri());
+    println!("origin: {}", req.headers().get("origin").map_or("none", |origin| origin.to_str().unwrap()));
+    // let (parts, body) = req.into_parts();
+    
+    // let bytes = buffer_and_print("request", body).await?;
+    // let req = Request::from_parts(parts, Body::from(bytes));
     
     let res = next.run(req).await;
 
-    let (parts, body) = res.into_parts();
+    // let (parts, body) = res.into_parts();
 
-    let bytes = buffer_and_print("response", body).await?;
-    let res = Response::from_parts(parts, Body::from(bytes));
+    // let bytes = buffer_and_print("response", body).await?;
+    // let res = Response::from_parts(parts, Body::from(bytes));
 
     Ok(res)
 }
