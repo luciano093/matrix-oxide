@@ -110,6 +110,7 @@ impl Server {
 #[derive(Debug, Clone)]
 struct Config {
     // .env configurations
+    server_name: String,
     listening_ip_addr: IpAddr,
     listening_port: u16,
     delegated_addr: String,
@@ -125,6 +126,15 @@ struct Config {
 impl Config {
     fn new() -> Self {
         let mut error_flag = false;
+
+        let server_name = match std::env::var("SERVER_NAME") {
+            Ok(str) => Ok(str),
+            Err(_) => {
+                eprintln!("Error: SERVER_NAME must be set.");
+                error_flag = true;
+                Err(())
+            }
+        };
 
         let listening_ip_addr = match std::env::var("LISTENING_IP_ADDR") {
             Ok(mut str) => {
@@ -247,6 +257,7 @@ impl Config {
         }
 
         // safe to call unwrap due to error flag exiting the program if there was an error
+        let server_name = server_name.unwrap();
         let listening_ip_addr = listening_ip_addr.unwrap();
         let listening_port = listening_port.unwrap();
         let delegated_addr = delegated_addr.unwrap();
@@ -265,7 +276,7 @@ impl Config {
             }
         };
 
-        Config { listening_ip_addr, listening_port, delegated_addr, delegated_port, x509_cert_path, x509_key_path, private_key, public_key }
+        Config { server_name, listening_ip_addr, listening_port, delegated_addr, delegated_port, x509_cert_path, x509_key_path, private_key, public_key }
     }
 }
 
@@ -305,7 +316,7 @@ async fn server_version() -> String {
 }
 
 // temporary dummy response
-async fn server_keys() -> String {
+async fn server_keys(config: Extension<Config>) -> String {
     format!(r#"{{
         "old_verify_keys": {{
             "ed25519:0ldk3y": {{
@@ -313,7 +324,7 @@ async fn server_keys() -> String {
                 "key": "VGhpcyBzaG91bGQgYmUgeW91ciBvbGQga2V5J3MgZWQyNTUxOSBwYXlsb2FkLg"
             }}
         }},
-        "server_name": "example.org",
+        "server_name": "{}",
         "signatures": {{
             "example.org": {{
             "ed25519:auto2": "VGhpcyBzaG91bGQgYWN0dWFsbHkgYmUgYSBzaWduYXR1cmU"
@@ -326,7 +337,7 @@ async fn server_keys() -> String {
             }}
         }}
     }}
-    "#)
+    "#, config.server_name)
 }
 
 fn is_valid_address(str: &str) -> bool {
