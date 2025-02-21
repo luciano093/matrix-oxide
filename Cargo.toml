@@ -14,3 +14,5 @@ axum = "0.8.1"
 tokio = { version = "1.43.0", features = ["macros", "rt-multi-thread"] }
 http-body-util = "0.1.2"
 axum-server = { version = "0.7.1", features = ["tls-rustls"] }
+dns-lookup = "2.0.4"
+url = "2.5.4"

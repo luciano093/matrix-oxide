@@ -2,6 +2,7 @@ use std::fs::{create_dir, File};
 use std::io::{Read, Write};
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
+use std::process::exit;
 use std::str::FromStr;
 
 use axum::body::{Body, Bytes};
@@ -10,7 +11,7 @@ use axum::http::Response;
 use axum::middleware::Next;
 use axum::response::IntoResponse;
 use axum::routing::get;
-use axum::{middleware, Router};
+use axum::{middleware, Extension, Router};
 use axum_server::tls_rustls::RustlsConfig;
 use base64::Engine;
 use ed25519_dalek::{SigningKey, VerifyingKey};
@@ -19,6 +20,7 @@ use reqwest::StatusCode;
 use serde_json::Value;
 use dotenv::dotenv;
 use http_body_util::BodyExt;
+use url::Url;
 
 #[derive(Debug, Default)]
 struct Server {
@@ -95,55 +97,194 @@ impl Server {
     }
 }
 
+#[derive(Debug, Clone)]
+struct Config {
+    listening_ip_addr: IpAddr,
+    listening_port: u16,
+    delegated_addr: String,
+    delegated_port: u16,
+    x509_cert_path: PathBuf,
+    x509_key_path: PathBuf,
+}
+
+impl Config {
+    fn new() -> Self {
+        let mut error_flag = false;
+
+        let listening_ip_addr = match std::env::var("LISTENING_IP_ADDR") {
+            Ok(mut str) => {
+                if str == "localhost" {
+                    str = "127.0.0.1".to_string();
+                }
+
+                match IpAddr::from_str(&str) {
+                    Ok(ip) => Ok(ip),
+                    Err(_) => {
+                        eprintln!("Error: LISTENING_IP_ADDR has an invalid ip address.");
+                        error_flag = true;
+                        Err(())
+                    }
+                }
+            },
+            Err(_) => {
+                eprintln!("Error: LISTENING_IP_ADDR must be set.");
+                error_flag = true;
+                Err(())
+            }
+        };
+
+        let listening_port = match std::env::var("LISTENING_PORT") {
+            Ok(str) => {
+                if is_valid_port(&str) {
+                    // parse should never error out due to is_valid_port verification
+                    Ok(str.parse::<u16>().unwrap())
+                } else {
+                    eprintln!("Error: LISTENING_PORT has an invalid port.");
+                    error_flag = true;
+                    Err(())
+                }
+            },
+            Err(_) => {
+                eprintln!("Error: LISTENING_PORT must be set.");
+                error_flag = true;
+                Err(())
+            }
+        };
+
+        let delegated_addr = match std::env::var("DELEGATED_ADDR") {
+            Ok(mut str) => {
+                if str == "localhost" {
+                    str = "127.0.0.1".to_string();
+                }
+
+                if IpAddr::from_str(&str).is_ok() || is_valid_address(&str) {
+                    Ok(str)
+                }
+                else {
+                    eprintln!("Error: DELEGATED_ADDR has either an invalid ip address or an invalid url.");
+                    error_flag = true;
+                    Err(())
+                }
+            },
+            Err(_) => {
+                eprintln!("Error: DELEGATED_ADDR must be set.");
+                error_flag = true;
+                Err(())
+            }
+        };
+
+        let delegated_port = match std::env::var("DELEGATED_PORT") {
+            Ok(str) => {
+                if is_valid_port(&str) {
+                    // parse should never error out due to is_valid_port verification
+                    Ok(str.parse::<u16>().unwrap())
+                } else {
+                    eprintln!("Error: DELEGATED_PORT has an invalid port.");
+                    error_flag = true;
+                    Err(())
+                }
+            },
+            Err(_) => {
+                eprintln!("Error: DELEGATED_PORT must be set.");
+                error_flag = true;
+                Err(())
+            }
+        };
+
+        let x509_cert_path = match std::env::var("X509_CERT_PATH") {
+            Ok(str) => {
+                match PathBuf::from_str(&str) {
+                    Ok(path) => Ok(path),
+                    Err(_) => {
+                        eprintln!("Error: X509_CERT_PATH has an invalid path.");
+                        error_flag = true;
+                        Err(()) 
+                    }
+                }
+            },
+            Err(_) => {
+                eprintln!("Error: X509_CERT_PATH must be set.");
+                error_flag = true;
+                Err(())
+            }
+        };
+
+        let x509_key_path = match std::env::var("X509_KEY_PATH") {
+            Ok(str) => {
+                match PathBuf::from_str(&str) {
+                    Ok(path) => Ok(path),
+                    Err(_) => {
+                        eprintln!("Error: X509_KEY_PATH has an invalid path.");
+                        error_flag = true;
+                        Err(()) 
+                    }
+                }
+            },
+            Err(_) => {
+                eprintln!("Error: X509_KEY_PATH must be set.");
+                error_flag = true;
+                Err(())
+            }
+        };
+
+        if error_flag {
+            exit(-1);
+        }
+
+        // safe to call unwrap due to error flag exiting the program if there was an error
+        let listening_ip_addr = listening_ip_addr.unwrap();
+        let listening_port = listening_port.unwrap();
+        let delegated_addr = delegated_addr.unwrap();
+        let delegated_port = delegated_port.unwrap();
+        let x509_cert_path = x509_cert_path.unwrap();
+        let x509_key_path = x509_key_path.unwrap();
+
+        Config { listening_ip_addr, listening_port, delegated_addr, delegated_port, x509_cert_path, x509_key_path }
+    }
+}
+
 #[tokio::main]
 async fn main() {
-
     dotenv().ok();
-    let listening_ip = std::env::var("LISTENING_IP_ADDR").expect("LISTENING_IP_ADDR must be set");
-    let listening_port = std::env::var("LISTENING_PORT").expect("LISTENING_PORT must be set");
-    std::env::var("DELEGATED_IP_ADDR").expect("DELEGATED_IP_ADDR must be set");
-    std::env::var("DELEGATED_PORT").expect("DELEGATED_PORT must be set");
+    let config = Config::new();
 
-    let cert = std::env::var("SSL_CERT").expect("SSL_CERT must be set");
-    let key = std::env::var("SSL_KEY").expect("SSL_KEY must be set");
-
-
-    let config: RustlsConfig = RustlsConfig::from_pem_file(PathBuf::from(cert), PathBuf::from(key)).await.unwrap();
+    let rustls_config = RustlsConfig::from_pem_file(config.x509_cert_path.clone(), config.x509_key_path.clone()).await.unwrap();
 
     tokio::task::block_in_place(|| {
         Server::connect("https://matrix.org");
     });
     
-    let ip = if listening_ip == "localhost" {
-        IpAddr::from_str("127.0.0.1").unwrap()
-    } else {
-        IpAddr::from_str(&listening_ip).unwrap()
-    };
-    let socket = SocketAddr::new(ip, u16::from_str_radix(&listening_port, 10).unwrap());
-    
+    let listening_socket = SocketAddr::new(config.listening_ip_addr, config.listening_port);
+
     let app = Router::new()
         .route("/.well-known/matrix/server", get(well_known))
-        .layer(middleware::from_fn(print_responses));
+        .layer(middleware::from_fn(print_responses))
+        .layer(Extension(config));
 
-    println!("listening on {}", socket);
 
-    axum_server::bind_rustls(socket, config).serve(app.into_make_service()).await.unwrap();
+    println!("listening on {}", listening_socket);
+
+    axum_server::bind_rustls(listening_socket, rustls_config).serve(app.into_make_service()).await.unwrap();
 
     Server::connect("https://matrix.org");
 }
 
-async fn well_known() -> String {
-    let delegated_ip = std::env::var("DELEGATED_IP_ADDR").expect("DELEGATED_IP_ADDR must be set.");
-    let delegated_port = std::env::var("DELEGATED_PORT").expect("DELEGATED_PORT must be set.");
+async fn well_known(config: Extension<Config>) -> String {
+    format!("{{ \"m.server\": \"{}:{}\" }}\n", config.delegated_addr, config.delegated_port)
+}
 
-    let ip = if delegated_ip == "localhost" {
-        IpAddr::from_str("127.0.0.1").unwrap()
+fn is_valid_address(str: &str) -> bool {
+    let input_with_scheme = if str.contains("://") {
+        str.to_string()
     } else {
-        IpAddr::from_str(&delegated_ip).unwrap()
+        format!("http://{}", str)
     };
-    let socket = SocketAddr::new(ip, u16::from_str_radix(&delegated_port, 10).unwrap());
 
-    format!("{{ \"m.server\": \"{}:{}\" }}\n", socket.ip(), socket.port())
+    Url::parse(&input_with_scheme).is_ok()
+}
+
+fn is_valid_port(str: &str) -> bool {
+    str.parse::<u16>().map_or(false, |port| port != 0)
 }
 
 async fn print_responses(req: Request, next: Next) -> Result<impl IntoResponse, (StatusCode, String)> {
