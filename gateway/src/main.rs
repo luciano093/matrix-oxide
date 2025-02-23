@@ -1,8 +1,8 @@
-use std::io::Read;
 use std::net::SocketAddr;
 
 use axum::body::Bytes;
 use axum::extract::{ConnectInfo, Request};
+use axum::http::StatusCode;
 use axum::middleware::Next;
 use axum::response::IntoResponse;
 use axum::routing::get;
@@ -11,49 +11,11 @@ use axum_server::tls_rustls::RustlsConfig;
 use base64::Engine;
 use ed25519_dalek::ed25519::signature::SignerMut;
 use ed25519_dalek::SigningKey;
-use matrix_oxide::config::Config;
-use matrix_oxide::key_manager::KeyMananger;
-use reqwest::StatusCode;
+use gateway::config::Config;
+use gateway::key_manager::KeyMananger;
 use serde_json::{json, Value};
 use dotenv::dotenv;
 use http_body_util::BodyExt;
-
-#[derive(Debug, Default)]
-struct Server {
-    delegated_name: String,
-}
-
-impl Server {
-    fn connect(url: &str) {  
-        // get delegated server name
-        let mut res = reqwest::blocking::get(format!("{}/.well-known/matrix/server", url)).unwrap();
-        let mut body = String::new();
-        res.read_to_string(&mut body).unwrap();
-
-        let mut server = Server::default();
-        server.delegated_name = serde_json::from_str::<Value>(&body).unwrap()["m.server"].as_str().unwrap().to_owned();
-
-        println!("{}", body);
-
-        // get server implemenation name and version
-        let mut res = reqwest::blocking::get(format!("https://{}/_matrix/federation/v1/version", server.delegated_name)).unwrap();
-        let mut body = String::new();
-        res.read_to_string(&mut body).unwrap();
-
-        let implementation_name = serde_json::from_str::<Value>(&body).unwrap()["server"]["name"].to_string();
-        let implementation_version = serde_json::from_str::<Value>(&body).unwrap()["server"]["version"].to_string();
-
-        println!("implementation name: {} implementation version: {}", implementation_name, implementation_version);
-
-        // get server published signing keys
-        let mut res = reqwest::blocking::get(format!("{}/_matrix/key/v2/server", url)).unwrap();
-        let mut body = String::new();
-        res.read_to_string(&mut body).unwrap();
-        let res = serde_json::from_str::<Value>(&body).unwrap();
-
-        println!("server_name: {}\nsignatures: {}\nvalid_until_ts: {}\nverify_keys: {}", res["server_name"], res["signatures"], res["valid_until_ts"], res["verify_keys"]);
-    }
-}
 
 #[tokio::main]
 async fn main() {
@@ -62,10 +24,6 @@ async fn main() {
 
     let rustls_config = RustlsConfig::from_pem_file(config.x509_cert_path().clone(), config.x509_key_path().clone()).await.unwrap();
     let key_manager = KeyMananger::new();
-
-    tokio::task::block_in_place(|| {
-        Server::connect("https://matrix.org");
-    });
     
     let listening_socket = SocketAddr::new(config.listening_ip_addr(), config.listening_port());
 
@@ -80,8 +38,6 @@ async fn main() {
     println!("listening on {}", listening_socket);
 
     axum_server::bind_rustls(listening_socket, rustls_config).serve(app.into_make_service_with_connect_info::<SocketAddr>()).await.unwrap();
-
-    Server::connect("https://matrix.org");
 }
 
 async fn well_known(config: Extension<Config>) -> String {
@@ -92,7 +48,6 @@ async fn server_version() -> String {
     "{\"server\": {\"name\": \"matrix-oxide\", \"version\": \"0.0.1\"}}".to_string()
 }
 
-// temporary dummy response
 async fn server_keys(config: Extension<Config>, key_manager: Extension<KeyMananger>) -> String {
     let mut json = json!({
         "server_name": config.server_name(),
@@ -105,8 +60,6 @@ async fn server_keys(config: Extension<Config>, key_manager: Extension<KeyManang
     });
 
     sign_json(&mut json, config.server_name(), &mut *key_manager.private_key().write().await);
-
-    println!("{}", json.to_string());
 
     json.to_string()
 }
