@@ -89,6 +89,14 @@ impl KeyMananger {
         }
     }
 
+    pub fn private_key(&self) -> Arc<RwLock<SigningKey>> {
+        self.private_key.clone()
+    }
+
+    pub fn public_key(&self) -> Arc<RwLock<VerifyingKey>> {
+        self.public_key.clone()
+    }
+
     pub fn public_key_b64(&self) -> Arc<RwLock<String>> {
         self.public_key_b64.clone()
     }

@@ -8,10 +8,13 @@ use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::{middleware, Extension, Router};
 use axum_server::tls_rustls::RustlsConfig;
+use base64::Engine;
+use ed25519_dalek::ed25519::signature::SignerMut;
+use ed25519_dalek::SigningKey;
 use matrix_oxide::config::Config;
 use matrix_oxide::key_manager::KeyMananger;
 use reqwest::StatusCode;
-use serde_json::Value;
+use serde_json::{json, Value};
 use dotenv::dotenv;
 use http_body_util::BodyExt;
 
@@ -91,27 +94,32 @@ async fn server_version() -> String {
 
 // temporary dummy response
 async fn server_keys(config: Extension<Config>, key_manager: Extension<KeyMananger>) -> String {
-    format!(r#"{{
-        "old_verify_keys": {{
-            "ed25519:0ldk3y": {{
-                "expired_ts": 1532645052628,
-                "key": "VGhpcyBzaG91bGQgYmUgeW91ciBvbGQga2V5J3MgZWQyNTUxOSBwYXlsb2FkLg"
-            }}
-        }},
-        "server_name": "{}",
-        "signatures": {{
-            "example.org": {{
-            "ed25519:auto2": "VGhpcyBzaG91bGQgYWN0dWFsbHkgYmUgYSBzaWduYXR1cmU"
-        }}
-        }},
-        "valid_until_ts": {},
-        "verify_keys": {{
-            "ed25519:abc123": {{
-                "key": "{}"
-            }}
-        }}
-    }}
-    "#, config.server_name(), key_manager.valid_until_ts().await, key_manager.public_key_b64().read().await)
+    let mut json = json!({
+        "server_name": config.server_name(),
+        "valid_until_ts": key_manager.valid_until_ts().await,
+        "verify_keys": {
+            "ed25519:abc123": {
+                "key": key_manager.public_key_b64().read().await.to_string(),
+            }
+        }
+    });
+
+    sign_json(&mut json, config.server_name(), &mut *key_manager.private_key().write().await);
+
+    println!("{}", json.to_string());
+
+    json.to_string()
+}
+
+fn sign_json(json: &mut Value, server_name: &str, private_key: &mut SigningKey) {
+    let signature = private_key.sign(json.to_string().as_bytes());
+    base64::prelude::BASE64_STANDARD_NO_PAD.encode(signature.to_bytes());
+
+    json["signatures"] = json!({
+        server_name: {
+            "ed25519:abc123": base64::prelude::BASE64_STANDARD_NO_PAD.encode(signature.to_bytes()),
+        }
+    });
 }
 
 async fn print_responses(ConnectInfo(info): ConnectInfo<SocketAddr>, req: Request, next: Next) -> Result<impl IntoResponse, (StatusCode, String)> {
