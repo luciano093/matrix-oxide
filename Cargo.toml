@@ -16,3 +16,4 @@ http-body-util = "0.1.2"
 axum-server = { version = "0.7.1", features = ["tls-rustls"] }
 dns-lookup = "2.0.4"
 url = "2.5.4"
+chrono = "0.4.39"

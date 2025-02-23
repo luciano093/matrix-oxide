@@ -1,6 +1,7 @@
 use url::Url;
 
 pub mod config;
+pub mod key_manager;
 
 fn is_valid_address(str: &str) -> bool {
     let input_with_scheme = if str.contains("://") {

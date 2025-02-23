@@ -9,6 +9,7 @@ use axum::routing::get;
 use axum::{middleware, Extension, Router};
 use axum_server::tls_rustls::RustlsConfig;
 use matrix_oxide::config::Config;
+use matrix_oxide::key_manager::KeyMananger;
 use reqwest::StatusCode;
 use serde_json::Value;
 use dotenv::dotenv;
@@ -57,6 +58,7 @@ async fn main() {
     let config = Config::new();
 
     let rustls_config = RustlsConfig::from_pem_file(config.x509_cert_path().clone(), config.x509_key_path().clone()).await.unwrap();
+    let key_manager = KeyMananger::new();
 
     tokio::task::block_in_place(|| {
         Server::connect("https://matrix.org");
@@ -69,7 +71,8 @@ async fn main() {
         .route("/_matrix/federation/v1/version", get(server_version))
         .route("/_matrix/key/v2/server", get(server_keys))
         .layer(middleware::from_fn(print_responses))
-        .layer(Extension(config));
+        .layer(Extension(config))
+        .layer(Extension(key_manager));
 
     println!("listening on {}", listening_socket);
 
@@ -87,7 +90,7 @@ async fn server_version() -> String {
 }
 
 // temporary dummy response
-async fn server_keys(config: Extension<Config>) -> String {
+async fn server_keys(config: Extension<Config>, key_manager: Extension<KeyMananger>) -> String {
     format!(r#"{{
         "old_verify_keys": {{
             "ed25519:0ldk3y": {{
@@ -101,14 +104,14 @@ async fn server_keys(config: Extension<Config>) -> String {
             "ed25519:auto2": "VGhpcyBzaG91bGQgYWN0dWFsbHkgYmUgYSBzaWduYXR1cmU"
         }}
         }},
-        "valid_until_ts": 1652262000000,
+        "valid_until_ts": {},
         "verify_keys": {{
             "ed25519:abc123": {{
-                "key": "VGhpcyBzaG91bGQgYmUgYSByZWFsIGVkMjU1MTkgcGF5bG9hZA"
+                "key": "{}"
             }}
         }}
     }}
-    "#, config.server_name())
+    "#, config.server_name(), key_manager.valid_until_ts().await, key_manager.public_key_b64().read().await)
 }
 
 async fn print_responses(ConnectInfo(info): ConnectInfo<SocketAddr>, req: Request, next: Next) -> Result<impl IntoResponse, (StatusCode, String)> {

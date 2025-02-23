@@ -1,17 +1,12 @@
-use std::fs::{create_dir, File};
-use std::io::{Read, Write};
 use std::{net::IpAddr, process::exit};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::str::FromStr;
-
-use ed25519_dalek::{SigningKey, VerifyingKey};
-use rand::rngs::OsRng;
 
 use crate::{is_valid_address, is_valid_port};
 
+// .env configurations
 #[derive(Debug, Clone)]
 pub struct Config {
-    // .env configurations
     server_name: String,
     listening_ip_addr: IpAddr,
     listening_port: u16,
@@ -19,10 +14,6 @@ pub struct Config {
     delegated_port: u16,
     x509_cert_path: PathBuf,
     x509_key_path: PathBuf,
-
-    // key pair
-    private_key: SigningKey,
-    public_key: VerifyingKey,
 }
 
 impl Config {
@@ -167,18 +158,7 @@ impl Config {
         let x509_cert_path = x509_cert_path.unwrap();
         let x509_key_path = x509_key_path.unwrap();
 
-        let (private_key, public_key) = if !key_pair_exists() {
-            create_key_pair()
-        } else {
-            let (private_key, public_key) = load_key_pair();
-            if !is_key_pair_valid(&private_key, &public_key) {
-                create_key_pair()
-            } else {
-                (private_key, public_key)
-            }
-        };
-
-        Config { server_name, listening_ip_addr, listening_port, delegated_addr, delegated_port, x509_cert_path, x509_key_path, private_key, public_key }
+        Config { server_name, listening_ip_addr, listening_port, delegated_addr, delegated_port, x509_cert_path, x509_key_path }
     }
 
     pub fn server_name(&self) -> &str {
@@ -208,52 +188,4 @@ impl Config {
     pub fn x509_key_path(&self) -> &PathBuf {
         &self.x509_key_path
     }
-}
-
-fn key_pair_exists() -> bool {
-    let key_pair_dir = Path::new("./.keys");
-    key_pair_dir.join("id_ed25519").exists() && key_pair_dir.join("id_ed25519.pub").exists()
-}
-
-fn is_key_pair_valid(private_key: &SigningKey, public_key: &VerifyingKey) -> bool {
-    private_key.verifying_key() == *public_key
-}
-
-fn create_key_pair() -> (SigningKey, VerifyingKey) {
-    if !Path::new("./.keys").exists() {
-        create_dir("./.keys").unwrap();
-    }
-
-    let mut csprng = OsRng;
-    let private_key = SigningKey::generate(&mut csprng);
-    let mut private_key_file = File::create_new("./.keys/id_ed25519").unwrap();
-
-    private_key_file.write_all(private_key.as_bytes()).unwrap();
-
-    let public_key = VerifyingKey::from(&private_key);
-    
-    let mut public_key_file = File::create_new("./.keys/id_ed25519.pub").unwrap();
-    public_key_file.write_all(public_key.as_bytes()).unwrap();
-
-    (private_key, public_key)
-}
-
-fn load_key_pair() -> (SigningKey, VerifyingKey) {
-    let private_key = {
-        let mut bytes = [0; 32];
-
-        File::open("./.keys/id_ed25519").unwrap().read_exact(&mut bytes).unwrap();
-
-        SigningKey::from_bytes(&bytes)
-    };
-
-    let public_key = {
-        let mut bytes = [0; 32];
-
-        File::open("./.keys/id_ed25519.pub").unwrap().read_exact(&mut bytes).unwrap();
-
-        VerifyingKey::from_bytes(&bytes).unwrap()
-    };
-
-    (private_key, public_key)
 }
