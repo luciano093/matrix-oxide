@@ -1,0 +1,11 @@
+[package]
+name = "client-api"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tokio = { workspace = true }
+dotenv = { workspace = true }
+axum = { workspace = true }
+axum-server = { workspace = true }
+dns-lookup = { workspace = true }

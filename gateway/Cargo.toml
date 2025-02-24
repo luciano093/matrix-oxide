@@ -6,13 +6,13 @@ edition = "2024"
 [dependencies]
 tokio = { workspace = true }
 serde_json = { workspace = true }
+dotenv = { workspace = true }
+axum = { workspace = true }
+axum-server = { workspace = true }
+dns-lookup = { workspace = true }
 ed25519-dalek = { version = "2.1.1", features = ["digest", "pem", "pkcs8", "rand_core"] }
 rand = "0.8.5"
 base64 = "0.22.1"
-dotenv = "0.15.0"
-axum = "0.8.1"
 http-body-util = "0.1.2"
-axum-server = { version = "0.7.1", features = ["tls-rustls"] }
-dns-lookup = "2.0.4"
 url = "2.5.4"
 chrono = "0.4.39"

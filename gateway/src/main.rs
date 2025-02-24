@@ -2,7 +2,7 @@ use std::net::SocketAddr;
 
 use axum::body::Bytes;
 use axum::extract::{ConnectInfo, Request};
-use axum::http::StatusCode;
+use axum::http::{Response, StatusCode};
 use axum::middleware::Next;
 use axum::response::IntoResponse;
 use axum::routing::get;
@@ -28,9 +28,11 @@ async fn main() {
     let listening_socket = SocketAddr::new(config.listening_ip_addr(), config.listening_port());
 
     let app = Router::new()
-        .route("/.well-known/matrix/server", get(well_known))
+        .route("/.well-known/matrix/server", get(well_known_server))
         .route("/_matrix/federation/v1/version", get(server_version))
         .route("/_matrix/key/v2/server", get(server_keys))
+        .route("/.well-known/matrix/client", get(well_known_client))
+        .route("/_matrix/client/versions", get(client_version))
         .layer(middleware::from_fn(print_responses))
         .layer(Extension(config))
         .layer(Extension(key_manager));
@@ -40,7 +42,19 @@ async fn main() {
     axum_server::bind_rustls(listening_socket, rustls_config).serve(app.into_make_service_with_connect_info::<SocketAddr>()).await.unwrap();
 }
 
-async fn well_known(config: Extension<Config>) -> String {
+async fn well_known_client(config: Extension<Config>) -> impl IntoResponse {
+    let body = format!(r#"{{"m.homeserver": {{ "base_url": "{}" }}}}"#, config.client_api_uri());
+
+    Response::builder().header("Access-Control-Allow-Origin", "*").body(body).unwrap()
+}
+
+async fn client_version() -> impl IntoResponse {
+    let body = r#"{"versions": ["v1.13"]}"#;
+
+    Response::builder().header("Access-Control-Allow-Origin", "*").body(body.to_string()).unwrap()
+}
+
+async fn well_known_server(config: Extension<Config>) -> String {
     format!("{{ \"m.server\": \"{}:{}\" }}\n", config.delegated_addr(), config.delegated_port())
 }
 

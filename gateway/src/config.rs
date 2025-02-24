@@ -2,6 +2,8 @@ use std::{net::IpAddr, process::exit};
 use std::path::PathBuf;
 use std::str::FromStr;
 
+use url::Url;
+
 use crate::{is_valid_address, is_valid_port};
 
 // .env configurations
@@ -12,6 +14,7 @@ pub struct Config {
     listening_port: u16,
     delegated_addr: String,
     delegated_port: u16,
+    client_api_uri: String,
     x509_cert_path: PathBuf,
     x509_key_path: PathBuf,
 }
@@ -109,6 +112,24 @@ impl Config {
             }
         };
 
+        let client_api_uri = match std::env::var("CLIENT_API_URI") {
+            Ok(str) => {
+                if Url::parse(&str).is_ok() {
+                    Ok(str)
+                }
+                else {
+                    eprintln!("Error: CLIENT_API_URI has an invalid URI.");
+                    error_flag = true;
+                    Err(())
+                }
+            },
+            Err(_) => {
+                eprintln!("Error: CLIENT_API_URI must be set.");
+                error_flag = true;
+                Err(())
+            }
+        };
+
         let x509_cert_path = match std::env::var("X509_CERT_PATH") {
             Ok(str) => {
                 match PathBuf::from_str(&str) {
@@ -155,10 +176,11 @@ impl Config {
         let listening_port = listening_port.unwrap();
         let delegated_addr = delegated_addr.unwrap();
         let delegated_port = delegated_port.unwrap();
+        let client_api_uri = client_api_uri.unwrap();
         let x509_cert_path = x509_cert_path.unwrap();
         let x509_key_path = x509_key_path.unwrap();
 
-        Config { server_name, listening_ip_addr, listening_port, delegated_addr, delegated_port, x509_cert_path, x509_key_path }
+        Config { server_name, listening_ip_addr, listening_port, delegated_addr, delegated_port, client_api_uri, x509_cert_path, x509_key_path }
     }
 
     pub fn server_name(&self) -> &str {
@@ -179,6 +201,10 @@ impl Config {
 
     pub const fn delegated_port(&self) -> u16 {
         self.delegated_port
+    }
+
+    pub fn client_api_uri(&self) -> &str {
+        &self.client_api_uri
     }
 
     pub const fn x509_cert_path(&self) -> &PathBuf {

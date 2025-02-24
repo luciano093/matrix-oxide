@@ -297,6 +297,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "client-api"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "axum-server",
+ "dns-lookup",
+ "dotenv",
+ "tokio",
+]
+
+[[package]]
 name = "cmake"
 version = "0.1.54"
 source = "registry+https://github.com/rust-lang/crates.io-index"
