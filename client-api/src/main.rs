@@ -2,13 +2,14 @@ use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 
 use axum::extract::{ConnectInfo, Request};
-use axum::http::{Response, StatusCode};
+use axum::http::{header, HeaderMap, HeaderName, HeaderValue, Method, Response, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::Router;
 use axum_server::tls_rustls::RustlsConfig;
 use dotenv::dotenv;
+use tower_http::cors::CorsLayer;
 
 #[tokio::main]
 async fn main() {
@@ -22,8 +23,23 @@ async fn main() {
     
     let listening_socket = SocketAddr::new(IpAddr::from_str(&listening_ip).unwrap(), 8449);
 
+    let mut default_headers = HeaderMap::new();
+    default_headers.insert("Content-Type", HeaderValue::from_static("application/json"));
+    default_headers.insert("Access-Control-Allow-Origin", HeaderValue::from_static("*"));
+    default_headers.insert("Access-Control-Allow-Methods", HeaderValue::from_static("GET, POST, PUT, DELETE, OPTIONS"));
+    default_headers.insert("Access-Control-Allow-Headers", HeaderValue::from_static("X-Requested-With, Content-Type, Authorization"));
+
+    let cors = CorsLayer::new()
+        .allow_origin("*".parse::<HeaderValue>().unwrap())
+        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE, Method::OPTIONS])
+        .allow_headers([HeaderName::from_str("X-Requested-With").unwrap(), header::CONTENT_TYPE, header::AUTHORIZATION]); //X-Requested-With
+
     let app = Router::new()
         .route("/_matrix/client/versions", get(client_version))
+        .route("/_matrix/client/v3/login", get(login))
+        .fallback(default)
+        .layer(cors)
+        .layer(tower_default_headers::DefaultHeadersLayer::new(default_headers))
         .layer(middleware::from_fn(print_responses));
 
     println!("listening on {}", listening_socket);
@@ -31,14 +47,25 @@ async fn main() {
     axum_server::bind_rustls(listening_socket, rustls_config).serve(app.into_make_service_with_connect_info::<SocketAddr>()).await.unwrap();
 }
 
+async fn default() -> impl IntoResponse {
+    let body = r#"{"errcode":"M_UNRECOGNIZED","error":"Unrecognized request"}"#;
+
+    Response::builder()
+        .status(404)
+        .body(body.to_string())
+        .unwrap()
+}
+
 async fn client_version() -> impl IntoResponse {
     let body = r#"{"versions":["v1.8", "v1.9","v1.10", "v1.11", "v1.12", "v1.13"]}"#;
 
-    Response::builder()
-        .header("Access-Control-Allow-Origin", "*")
-        .header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-        .header("Access-Control-Allow-Headers", "X-Requested-With, Content-Type, Authorization")
-        .body(body.to_string()).unwrap()
+    Response::new(body.to_string())
+}
+
+async fn login() -> impl IntoResponse {
+    let body = r#"{"flows": [{"type": "m.login.password"}]}"#;
+
+    Response::new(body.to_string())
 }
 
 async fn print_responses(ConnectInfo(info): ConnectInfo<SocketAddr>, req: Request, next: Next) -> Result<impl IntoResponse, (StatusCode, String)> {
