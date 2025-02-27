@@ -62,15 +62,19 @@ async fn client_version() -> impl IntoResponse {
         .body(body.to_string()).unwrap()
 }
 
-async fn well_known_server(config: Extension<Config>) -> String {
-    format!("{{ \"m.server\": \"{}:{}\" }}\n", config.delegated_addr(), config.delegated_port())
+async fn well_known_server(config: Extension<Config>) -> impl IntoResponse {
+    let body = format!("{{ \"m.server\": \"{}:{}\" }}\n", config.delegated_addr(), config.delegated_port());
+
+    Response::new(body)
 }
 
-async fn server_version() -> String {
-    "{\"server\": {\"name\": \"matrix-oxide\", \"version\": \"0.0.1\"}}".to_string()
+async fn server_version() -> impl IntoResponse {
+    let body = "{\"server\": {\"name\": \"matrix-oxide\", \"version\": \"0.0.1\"}}".to_string();
+
+    Response::new(body)
 }
 
-async fn server_keys(config: Extension<Config>, key_manager: Extension<KeyMananger>) -> String {
+async fn server_keys(config: Extension<Config>, key_manager: Extension<KeyMananger>) -> impl IntoResponse {
     let mut json = json!({
         "server_name": config.server_name(),
         "valid_until_ts": key_manager.valid_until_ts().await,
@@ -83,7 +87,7 @@ async fn server_keys(config: Extension<Config>, key_manager: Extension<KeyManang
 
     sign_json(&mut json, config.server_name(), &mut *key_manager.private_key().write().await);
 
-    json.to_string()
+    Response::new(json.to_string())
 }
 
 fn sign_json(json: &mut Value, server_name: &str, private_key: &mut SigningKey) {
