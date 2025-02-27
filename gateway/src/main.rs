@@ -45,13 +45,21 @@ async fn main() {
 async fn well_known_client(config: Extension<Config>) -> impl IntoResponse {
     let body = format!(r#"{{"m.homeserver": {{ "base_url": "{}" }}}}"#, config.client_api_uri());
 
-    Response::builder().header("Access-Control-Allow-Origin", "*").body(body).unwrap()
+    Response::builder()
+        .header("Access-Control-Allow-Origin", "*")
+        .header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+        .header("Access-Control-Allow-Headers", "X-Requested-With, Content-Type, Authorization")
+        .body(body.to_string()).unwrap()
 }
 
 async fn client_version() -> impl IntoResponse {
-    let body = r#"{"versions": ["v1.13"]}"#;
+    let body = "{\"versions\": [\"v1.11\", \"v1.13\"]}";
 
-    Response::builder().header("Access-Control-Allow-Origin", "*").body(body.to_string()).unwrap()
+    Response::builder()
+        .header("Access-Control-Allow-Origin", "*")
+        .header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+        .header("Access-Control-Allow-Headers", "X-Requested-With, Content-Type, Authorization")
+        .body(body.to_string()).unwrap()
 }
 
 async fn well_known_server(config: Extension<Config>) -> String {
