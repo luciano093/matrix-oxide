@@ -1,11 +1,11 @@
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 
-use axum::extract::{ConnectInfo, Request};
+use axum::extract::{ConnectInfo, Path, Request};
 use axum::http::{header, HeaderMap, HeaderName, HeaderValue, Method, Response, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::IntoResponse;
-use axum::routing::{get, post};
+use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use axum_server::tls_rustls::RustlsConfig;
 use dotenv::dotenv;
@@ -39,6 +39,12 @@ async fn main() {
         .route("/_matrix/client/versions", get(client_version))
         .route("/_matrix/client/v3/login", get(login))
         .route("/_matrix/client/v3/login", post(post_login))
+        .route("/_matrix/client/v3/pushrules/", get(push_rules))
+        .route("/_matrix/client/v3/user/{user_id}/filter", post(post_filter))
+        .route("/_matrix/client/v3/sync", get(sync))
+        .route("/_matrix/client/v3/user/{userId}/account_data/{type}", put(account_data))
+        .route("/_matrix/client/v3/keys/upload", post(upload_keys))
+        .route("/_matrix/client/v3/keys/query", post(query_keys))
         .fallback(default)
         .layer(cors)
         .layer(tower_default_headers::DefaultHeadersLayer::new(default_headers))
@@ -87,13 +93,64 @@ async fn post_login(Json(body): Json<Value>) -> impl IntoResponse {
         \"user_id\": \"@{}:matrix-oxide.kyun.li:8448\",\
         \"well_known\": {{\
           \"m.homeserver\": {{\
-            \"base_url\": \"https://matrix-oxide.kyun.li:8448\"\
+            \"base_url\": \"https://matrix-oxide.kyun.li:8449\"\
         }},
           \"m.identity_server\": {{
             \"base_url\": \"https://id.example.org\"\
         }}\
         }}\
     }}", username);      
+
+    Response::builder().status(200).body(body.to_string()).unwrap()
+}
+
+// TODO: implement push rules
+async fn push_rules() -> impl IntoResponse {
+    let body = "{}";
+
+    Response::builder().status(200).body(body.to_string()).unwrap()
+}
+
+// TODO: implement id creation
+async fn post_filter(Path(user_id): Path<String>) -> impl IntoResponse {
+    let body = format!(r#"{{
+        "filter_id": "{user_id}"
+    }}"#);
+
+    Response::builder().status(200).body(body.to_string()).unwrap()
+}
+
+// TODO: implement real sync response parameters
+async fn sync() -> impl IntoResponse {
+    let body = format!(r#"{{
+        "next_batch": "dummy"
+    }}"#);
+
+    Response::builder().status(200).body(body.to_string()).unwrap()
+}
+
+// TODO: load actual account data 
+async fn account_data() -> impl IntoResponse {
+    let body = format!(r#"{{}}"#);
+
+    Response::builder().status(200).body(body.to_string()).unwrap()
+}
+
+// TODO: implement key count
+async fn upload_keys() -> impl IntoResponse {
+    let body = format!(r#"{{
+        "one_time_key_counts": {{
+            "signed_curve25519": 0
+        }}
+    }}"#);
+
+    Response::builder().status(200).body(body.to_string()).unwrap()
+}
+
+// TODO: implement query_keys function
+async fn query_keys() -> impl IntoResponse {
+    let body = format!(r#"{{
+    }}"#);
 
     Response::builder().status(200).body(body.to_string()).unwrap()
 }
