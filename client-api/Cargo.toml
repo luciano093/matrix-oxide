@@ -9,5 +9,7 @@ dotenv = { workspace = true }
 axum = { workspace = true }
 axum-server = { workspace = true }
 dns-lookup = { workspace = true }
+http-body-util = { workspace = true }
+serde_json = { workspace = true }
 tower-default-headers = "0.2.0"
 tower-http = { version = "0.6.2", features = ["cors"] }

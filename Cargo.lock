@@ -304,6 +304,8 @@ dependencies = [
  "axum-server",
  "dns-lookup",
  "dotenv",
+ "http-body-util",
+ "serde_json",
  "tokio",
  "tower-default-headers",
  "tower-http",

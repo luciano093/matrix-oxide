@@ -5,10 +5,11 @@ use axum::extract::{ConnectInfo, Request};
 use axum::http::{header, HeaderMap, HeaderName, HeaderValue, Method, Response, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::IntoResponse;
-use axum::routing::get;
-use axum::Router;
+use axum::routing::{get, post};
+use axum::{Json, Router};
 use axum_server::tls_rustls::RustlsConfig;
 use dotenv::dotenv;
+use serde_json::Value;
 use tower_http::cors::CorsLayer;
 
 #[tokio::main]
@@ -32,11 +33,12 @@ async fn main() {
     let cors = CorsLayer::new()
         .allow_origin("*".parse::<HeaderValue>().unwrap())
         .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE, Method::OPTIONS])
-        .allow_headers([HeaderName::from_str("X-Requested-With").unwrap(), header::CONTENT_TYPE, header::AUTHORIZATION]); //X-Requested-With
+        .allow_headers([HeaderName::from_str("X-Requested-With").unwrap(), header::CONTENT_TYPE, header::AUTHORIZATION]);
 
     let app = Router::new()
         .route("/_matrix/client/versions", get(client_version))
         .route("/_matrix/client/v3/login", get(login))
+        .route("/_matrix/client/v3/login", post(post_login))
         .fallback(default)
         .layer(cors)
         .layer(tower_default_headers::DefaultHeadersLayer::new(default_headers))
@@ -66,6 +68,34 @@ async fn login() -> impl IntoResponse {
     let body = r#"{"flows": [{"type": "m.login.password"}]}"#;
 
     Response::new(body.to_string())
+}
+
+// TODO: replace dummy parameters with real ones
+async fn post_login(Json(body): Json<Value>) -> impl IntoResponse {
+    println!("{:?}", body);
+
+    let username = body["identifier"]["user"].as_str().unwrap();
+    let password = body["password"].as_str().unwrap();
+
+    println!("username: {} password: {}", username, password);
+
+    let body = format!("{{\
+        \"access_token\": \"abc123\",\
+        \"device_id\": \"GHTYAJCE\",\
+        \"expires_in_ms\": 60000,\
+        \"refresh_token\": \"def456\",\
+        \"user_id\": \"@{}:matrix-oxide.kyun.li:8448\",\
+        \"well_known\": {{\
+          \"m.homeserver\": {{\
+            \"base_url\": \"https://matrix-oxide.kyun.li:8448\"\
+        }},
+          \"m.identity_server\": {{
+            \"base_url\": \"https://id.example.org\"\
+        }}\
+        }}\
+    }}", username);      
+
+    Response::builder().status(200).body(body.to_string()).unwrap()
 }
 
 async fn print_responses(ConnectInfo(info): ConnectInfo<SocketAddr>, req: Request, next: Next) -> Result<impl IntoResponse, (StatusCode, String)> {
