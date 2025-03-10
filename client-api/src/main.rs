@@ -60,15 +60,18 @@ async fn main() {
     let access_tokens = Arc::new(RwLock::new(HashMap::<String, TokenInfo>::new()));
 
     let app = Router::new()
-        .route("/_matrix/client/versions", get(client_version))
+        .route("/_matrix/client/versions", get(client_version)) // TODO: add optional authentication
         .route("/_matrix/client/v3/login", get(login))
         .route("/_matrix/client/v3/login", post(post_login))
-        .route("/_matrix/client/v3/pushrules/", get(push_rules))
-        .route("/_matrix/client/v3/user/{user_id}/filter", post(post_filter))
-        .route("/_matrix/client/v3/sync", get(sync))
-        .route("/_matrix/client/v3/user/{userId}/account_data/{type}", put(account_data))
-        .route("/_matrix/client/v3/keys/upload", post(upload_keys))
-        .route("/_matrix/client/v3/keys/query", post(query_keys))
+        .merge(Router::new()
+            .route("/_matrix/client/v3/pushrules/", get(push_rules))
+            .route("/_matrix/client/v3/user/{user_id}/filter", post(post_filter))
+            .route("/_matrix/client/v3/sync", get(sync))
+            .route("/_matrix/client/v3/user/{userId}/account_data/{type}", put(account_data))
+            .route("/_matrix/client/v3/keys/upload", post(upload_keys))
+            .route("/_matrix/client/v3/keys/query", post(query_keys))
+            .layer(middleware::from_fn(require_auth))
+        )
         .fallback(default)
         .layer(Extension(access_tokens))
         .layer(Extension(config))
@@ -104,6 +107,8 @@ async fn login() -> impl IntoResponse {
 
 // TODO: replace dummy identity server with real one
 // TODO: store refresh_token in a database
+// TODO: tie device_id to access_token
+// TODO: save valid access tokens in db before program exits to load them when program starts
 async fn post_login(
     Extension(access_tokens): Extension<Arc<RwLock<HashMap<String, TokenInfo>>>>,
     Extension(config): Extension<Config>,
@@ -123,7 +128,7 @@ async fn post_login(
 
     // TODO: see if there is a way to not use clone()
     let token_info = TokenInfo::new(access_token.clone(), expires_in_ms);
-    access_tokens.write().await.insert(device_id.clone(), token_info); 
+    access_tokens.write().await.insert(access_token.clone(), token_info); 
 
     let expires_in_ms = (expires_in_ms - Utc::now()).num_milliseconds();
 
@@ -199,6 +204,53 @@ async fn query_keys() -> impl IntoResponse {
     }}"#);
 
     Response::builder().status(200).body(body.to_string()).unwrap()
+}
+
+
+// TODO: replace dummy error with real one
+async fn require_auth(
+        Extension(access_tokens): Extension<Arc<RwLock<HashMap<String, TokenInfo>>>>,
+        headers: HeaderMap,
+        req: Request,
+        next: Next
+    ) -> Result<impl IntoResponse, impl IntoResponse> {
+    let error_body = r#"
+        {
+        "errcode": "M_FORBIDDEN",
+        "error": "Invalid password",
+        "completed": [ "example.type.foo" ],
+        "flows": [
+        {
+            "stages": [ "example.type.foo", "example.type.bar" ]
+        },
+        {
+            "stages": [ "example.type.foo", "example.type.baz" ]
+        }
+        ],
+        "params": {
+            "example.type.baz": {
+                "example_key": "foobar"
+            }
+        },
+        "session": "xxxxxx"
+        }
+    "#;
+
+    let error_res = Response::builder().status(401).body(error_body.to_string()).unwrap();
+
+    if headers.get("authorization").is_none() {
+        return Err(error_res);
+    }
+
+    let access_token = &headers.get("authorization").unwrap().to_str().unwrap()[7..];
+
+    if !access_tokens.read().await.contains_key(access_token) {
+        return Err(error_res);
+    }
+
+    let res = next.run(req).await;
+
+    Ok(res)
 }
 
 async fn print_responses(ConnectInfo(info): ConnectInfo<SocketAddr>, req: Request, next: Next) -> Result<impl IntoResponse, (StatusCode, String)> {
