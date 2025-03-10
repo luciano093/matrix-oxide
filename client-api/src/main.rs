@@ -20,6 +20,12 @@ use serde_json::Value;
 use tokio::sync::RwLock;
 use tower_http::cors::CorsLayer;
 
+#[derive(Debug, Clone)]
+struct Config {
+    server_name: String,
+    client_uri: String,
+}
+
 #[tokio::main]
 async fn main() {
     dotenv().ok();
@@ -27,6 +33,14 @@ async fn main() {
     let listening_ip = std::env::var("LISTENING_IP_ADDR").unwrap();
     let cert = std::env::var("X509_CERT_PATH").unwrap();
     let privkey = std::env::var("X509_KEY_PATH").unwrap();
+    
+    let server_name = std::env::var("SERVER_NAME").unwrap();
+    let client_uri = std::env::var("CLIENT_API_URI").unwrap();
+
+    let config = Config {
+        server_name,
+        client_uri,
+    };
 
     let rustls_config = RustlsConfig::from_pem_file(cert, privkey).await.unwrap();
     
@@ -57,6 +71,7 @@ async fn main() {
         .route("/_matrix/client/v3/keys/query", post(query_keys))
         .fallback(default)
         .layer(Extension(access_tokens))
+        .layer(Extension(config))
         .layer(cors)
         .layer(tower_default_headers::DefaultHeadersLayer::new(default_headers))
         .layer(middleware::from_fn(print_responses));
@@ -87,8 +102,13 @@ async fn login() -> impl IntoResponse {
     Response::new(body.to_string())
 }
 
-// TODO: replace dummy parameters with real ones
-async fn post_login(Extension(access_tokens): Extension<Arc<RwLock<HashMap<String, TokenInfo>>>>, Json(body): Json<Value>) -> impl IntoResponse {
+// TODO: replace dummy identity server with real one
+// TODO: store refresh_token in a database
+async fn post_login(
+    Extension(access_tokens): Extension<Arc<RwLock<HashMap<String, TokenInfo>>>>,
+    Extension(config): Extension<Config>,
+    Json(body): Json<Value>,
+    ) -> impl IntoResponse {
     println!("{:?}", body);
 
     let username = body["identifier"]["user"].as_str().unwrap();
@@ -106,18 +126,21 @@ async fn post_login(Extension(access_tokens): Extension<Arc<RwLock<HashMap<Strin
     access_tokens.write().await.insert(device_id.clone(), token_info); 
 
     let expires_in_ms = (expires_in_ms - Utc::now()).num_milliseconds();
+
+    let server_name = &config.server_name;
+    let client_uri = &config.client_uri;
     
     let body = format!("{{\
         \"access_token\": \"{access_token}\",\
         \"device_id\": \"{device_id}\",\
         \"expires_in_ms\": {expires_in_ms},\
         \"refresh_token\": \"{refresh_token}\",\
-        \"user_id\": \"@{username}:matrix-oxide.kyun.li:8448\",\
+        \"user_id\": \"@{username}:{server_name}\",\
         \"well_known\": {{\
           \"m.homeserver\": {{\
-            \"base_url\": \"https://matrix-oxide.kyun.li:8449\"\
+            \"base_url\": \"{client_uri}\"\
         }},
-          \"m.identity_server\": {{
+        \"m.identity_server\": {{
             \"base_url\": \"https://id.example.org\"\
         }}\
         }}\
