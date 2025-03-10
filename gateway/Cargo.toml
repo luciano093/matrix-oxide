@@ -11,8 +11,8 @@ axum = { workspace = true }
 axum-server = { workspace = true }
 dns-lookup = { workspace = true }
 http-body-util = { workspace = true }
+base64 = { workspace = true }
+chrono = { workspace = true }
 ed25519-dalek = { version = "2.1.1", features = ["digest", "pem", "pkcs8", "rand_core"] }
 rand = "0.8.5"
-base64 = "0.22.1"
 url = "2.5.4"
-chrono = "0.4.39"

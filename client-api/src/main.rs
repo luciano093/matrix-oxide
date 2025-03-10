@@ -1,15 +1,23 @@
+use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
+use std::sync::Arc;
 
 use axum::extract::{ConnectInfo, Path, Request};
 use axum::http::{header, HeaderMap, HeaderName, HeaderValue, Method, Response, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::IntoResponse;
 use axum::routing::{get, post, put};
-use axum::{Json, Router};
+use axum::{Extension, Json, Router};
 use axum_server::tls_rustls::RustlsConfig;
+use base64::engine::general_purpose;
+use base64::Engine;
+use chrono::{Duration, Utc};
+use client_api::token_info::TokenInfo;
 use dotenv::dotenv;
+use ring::rand::{SecureRandom, SystemRandom};
 use serde_json::Value;
+use tokio::sync::RwLock;
 use tower_http::cors::CorsLayer;
 
 #[tokio::main]
@@ -35,6 +43,8 @@ async fn main() {
         .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE, Method::OPTIONS])
         .allow_headers([HeaderName::from_str("X-Requested-With").unwrap(), header::CONTENT_TYPE, header::AUTHORIZATION]);
 
+    let access_tokens = Arc::new(RwLock::new(HashMap::<String, TokenInfo>::new()));
+
     let app = Router::new()
         .route("/_matrix/client/versions", get(client_version))
         .route("/_matrix/client/v3/login", get(login))
@@ -46,6 +56,7 @@ async fn main() {
         .route("/_matrix/client/v3/keys/upload", post(upload_keys))
         .route("/_matrix/client/v3/keys/query", post(query_keys))
         .fallback(default)
+        .layer(Extension(access_tokens))
         .layer(cors)
         .layer(tower_default_headers::DefaultHeadersLayer::new(default_headers))
         .layer(middleware::from_fn(print_responses));
@@ -77,7 +88,7 @@ async fn login() -> impl IntoResponse {
 }
 
 // TODO: replace dummy parameters with real ones
-async fn post_login(Json(body): Json<Value>) -> impl IntoResponse {
+async fn post_login(Extension(access_tokens): Extension<Arc<RwLock<HashMap<String, TokenInfo>>>>, Json(body): Json<Value>) -> impl IntoResponse {
     println!("{:?}", body);
 
     let username = body["identifier"]["user"].as_str().unwrap();
@@ -85,12 +96,23 @@ async fn post_login(Json(body): Json<Value>) -> impl IntoResponse {
 
     println!("username: {} password: {}", username, password);
 
+    let device_id = uuid::Uuid::new_v4().to_string();
+    let access_token = generate_access_token();
+    let expires_in_ms = Utc::now() + Duration::minutes(60); // 60 minutes
+    let refresh_token = generate_refresh_token();
+
+    // TODO: see if there is a way to not use clone()
+    let token_info = TokenInfo::new(access_token.clone(), expires_in_ms);
+    access_tokens.write().await.insert(device_id.clone(), token_info); 
+
+    let expires_in_ms = (expires_in_ms - Utc::now()).num_milliseconds();
+    
     let body = format!("{{\
-        \"access_token\": \"abc123\",\
-        \"device_id\": \"GHTYAJCE\",\
-        \"expires_in_ms\": 60000,\
-        \"refresh_token\": \"def456\",\
-        \"user_id\": \"@{}:matrix-oxide.kyun.li:8448\",\
+        \"access_token\": \"{access_token}\",\
+        \"device_id\": \"{device_id}\",\
+        \"expires_in_ms\": {expires_in_ms},\
+        \"refresh_token\": \"{refresh_token}\",\
+        \"user_id\": \"@{username}:matrix-oxide.kyun.li:8448\",\
         \"well_known\": {{\
           \"m.homeserver\": {{\
             \"base_url\": \"https://matrix-oxide.kyun.li:8449\"\
@@ -99,13 +121,14 @@ async fn post_login(Json(body): Json<Value>) -> impl IntoResponse {
             \"base_url\": \"https://id.example.org\"\
         }}\
         }}\
-    }}", username);      
+    }}"); 
 
     Response::builder().status(200).body(body.to_string()).unwrap()
 }
 
 // TODO: implement push rules
-async fn push_rules() -> impl IntoResponse {
+async fn push_rules(headers: HeaderMap) -> impl IntoResponse {
+    println!("{:?}", headers);
     let body = "{}";
 
     Response::builder().status(200).body(body.to_string()).unwrap()
@@ -138,7 +161,7 @@ async fn account_data() -> impl IntoResponse {
 
 // TODO: implement key count
 async fn upload_keys() -> impl IntoResponse {
-    let body = format!(r#"{{
+    let body: String = format!(r#"{{
         "one_time_key_counts": {{
             "signed_curve25519": 0
         }}
@@ -162,4 +185,18 @@ async fn print_responses(ConnectInfo(info): ConnectInfo<SocketAddr>, req: Reques
     let res = next.run(req).await;
 
     Ok(res)
+}
+
+fn generate_access_token() -> String {
+    let rng = SystemRandom::new();
+    let mut bytes = [0u8; 32];  // 32 bytes = 256-bit security
+    rng.fill(&mut bytes).unwrap();
+    general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+}
+
+fn generate_refresh_token() -> String {
+    let rng = SystemRandom::new();
+    let mut bytes = [0u8; 64];  // 64 bytes = 512-bit security
+    rng.fill(&mut bytes).unwrap();
+    general_purpose::URL_SAFE_NO_PAD.encode(bytes)
 }
