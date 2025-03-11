@@ -216,23 +216,8 @@ async fn require_auth(
     ) -> Result<impl IntoResponse, impl IntoResponse> {
     let error_body = r#"
         {
-        "errcode": "M_FORBIDDEN",
-        "error": "Invalid password",
-        "completed": [ "example.type.foo" ],
-        "flows": [
-        {
-            "stages": [ "example.type.foo", "example.type.bar" ]
-        },
-        {
-            "stages": [ "example.type.foo", "example.type.baz" ]
-        }
-        ],
-        "params": {
-            "example.type.baz": {
-                "example_key": "foobar"
-            }
-        },
-        "session": "xxxxxx"
+            "errcode": "M_UNKNOWN_TOKEN",
+            "error": "The access token specified was not recognised."
         }
     "#;
 
