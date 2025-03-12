@@ -3,7 +3,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 use std::sync::Arc;
 
-use axum::extract::{ConnectInfo, Path, Request};
+use axum::extract::{ConnectInfo, Path, Query, Request};
 use axum::http::{header, HeaderMap, HeaderName, HeaderValue, Method, Response, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::IntoResponse;
@@ -13,11 +13,13 @@ use axum_server::tls_rustls::RustlsConfig;
 use base64::engine::general_purpose;
 use base64::Engine;
 use chrono::{Duration, Utc};
+use client_api::sync_manager::SyncManager;
 use client_api::token_info::TokenInfo;
 use dotenv::dotenv;
 use ring::rand::{SecureRandom, SystemRandom};
-use serde_json::Value;
+use serde_json::{json, Value};
 use tokio::sync::RwLock;
+use tokio::time::sleep;
 use tower_http::cors::CorsLayer;
 
 #[derive(Debug, Clone)]
@@ -58,6 +60,7 @@ async fn main() {
         .allow_headers([HeaderName::from_str("X-Requested-With").unwrap(), header::CONTENT_TYPE, header::AUTHORIZATION]);
 
     let access_tokens = Arc::new(RwLock::new(HashMap::<String, TokenInfo>::new()));
+    let sync_manager = SyncManager::new();
 
     let app = Router::new()
         .route("/_matrix/client/versions", get(client_version)) // TODO: add optional authentication
@@ -73,6 +76,7 @@ async fn main() {
             .layer(middleware::from_fn(require_auth))
         )
         .fallback(default)
+        .layer(Extension(sync_manager))
         .layer(Extension(access_tokens))
         .layer(Extension(config))
         .layer(cors)
@@ -110,6 +114,7 @@ async fn login() -> impl IntoResponse {
 // TODO: tie device_id to access_token
 // TODO: save valid access tokens in db before program exits to load them when program starts
 async fn post_login(
+    Extension(sync_manager): Extension<SyncManager>,
     Extension(access_tokens): Extension<Arc<RwLock<HashMap<String, TokenInfo>>>>,
     Extension(config): Extension<Config>,
     Json(body): Json<Value>,
@@ -127,8 +132,8 @@ async fn post_login(
     let refresh_token = generate_refresh_token();
 
     // TODO: see if there is a way to not use clone()
-    let token_info = TokenInfo::new(access_token.clone(), expires_in_ms);
-    access_tokens.write().await.insert(access_token.clone(), token_info); 
+    let token_info = TokenInfo::new(access_token.clone(), expires_in_ms, username);
+    access_tokens.write().await.insert(access_token.clone(), token_info);
 
     let expires_in_ms = (expires_in_ms - Utc::now()).num_milliseconds();
 
@@ -151,6 +156,8 @@ async fn post_login(
         }}\
     }}"); 
 
+    sync_manager.add_user(username);
+
     Response::builder().status(200).body(body.to_string()).unwrap()
 }
 
@@ -172,10 +179,28 @@ async fn post_filter(Path(user_id): Path<String>) -> impl IntoResponse {
 }
 
 // TODO: implement real sync response parameters
-async fn sync() -> impl IntoResponse {
-    let body = format!(r#"{{
-        "next_batch": "dummy"
-    }}"#);
+async fn sync(
+    Extension(sync_manager): Extension<SyncManager>,
+    Extension(access_tokens): Extension<Arc<RwLock<HashMap<String, TokenInfo>>>>,
+    Query(query): Query<HashMap<String, String>>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    println!("sync: {:?}", query);
+
+    let access_token = &headers.get("authorization").unwrap().to_str().unwrap()[7..];
+    let username = access_tokens.read().await.get(access_token).unwrap().username().clone();
+    
+    let since = query.get("since").map(|str| str.parse::<u128>().unwrap());
+    let timeout = query.get("timeout").unwrap().parse().unwrap();
+
+    let (next_batch, state) = sync_manager.sync(&username, since);
+
+    println!("next_batch: {} state: {:?}", next_batch, state);
+    println!("json state: {}", json!(*state));
+    
+    sleep(std::time::Duration::from_millis(timeout)).await;
+
+    let body = json!(*state);
 
     Response::builder().status(200).body(body.to_string()).unwrap()
 }

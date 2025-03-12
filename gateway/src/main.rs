@@ -1,6 +1,5 @@
 use std::net::SocketAddr;
 
-use axum::body::Bytes;
 use axum::extract::{ConnectInfo, Request};
 use axum::http::{Response, StatusCode};
 use axum::middleware::Next;
@@ -15,7 +14,6 @@ use gateway::config::Config;
 use gateway::key_manager::KeyMananger;
 use serde_json::{json, Value};
 use dotenv::dotenv;
-use http_body_util::BodyExt;
 
 #[tokio::main]
 async fn main() {
@@ -117,26 +115,4 @@ async fn print_responses(ConnectInfo(info): ConnectInfo<SocketAddr>, req: Reques
     // let res = Response::from_parts(parts, Body::from(bytes));
 
     Ok(res)
-}
-
-async fn buffer_and_print<B>(direction: &str, body: B) -> Result<Bytes, (StatusCode, String)>
-where
-    B: axum::body::HttpBody<Data = Bytes>,
-    B::Error: std::fmt::Display,
-{
-    let bytes = match body.collect().await {
-        Ok(collected) => collected.to_bytes(),
-        Err(err) => {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                format!("failed to read {direction} body: {err}"),
-            ));
-        }
-    };
-
-    if let Ok(body) = std::str::from_utf8(&bytes) {
-        println!("{direction}:\n{body}");
-    }
-
-    Ok(bytes)
 }
